@@ -12,7 +12,7 @@ dayjs.extend(timezone);
 
 @Injectable()
 export class GetTimeSlotsService {
-  async getDayTimeTable(query: DayTimetableQueryDto) {
+  async getDayTimeTable(query: DayTimetableQueryDto): Promise<DayTimetable[]> {
     const { start_day_identifier, timezone_identifier, days } = query;
 
     const startDay = dayjs(start_day_identifier, 'YYYYMMDD').tz(
@@ -34,6 +34,7 @@ export class GetTimeSlotsService {
         this.generateDayTimetable(currentDay, workhour, eventsData, query),
       );
     }
+
     return timeTables;
   }
 
@@ -55,10 +56,10 @@ export class GetTimeSlotsService {
     const timeslots: Timeslot[] = [];
 
     const timeInfo = {
-      totalOpenTime: startOfDay + 0,
+      totalOpenTime: startOfDay,
       totalCloseTime: startOfDay + 86400,
-      workOpenTime: startOfDay + workhour?.open_interval,
-      workCloseTime: startOfDay + workhour?.close_interval,
+      workOpenTime: startOfDay + (workhour?.open_interval || 0),
+      workCloseTime: startOfDay + (workhour?.close_interval || 86400),
     };
 
     for (
@@ -66,47 +67,20 @@ export class GetTimeSlotsService {
       slot + service_duration <= timeInfo.totalCloseTime;
       slot += timeslot_interval
     ) {
-      if (is_ignore_schedule && is_ignore_workhour) {
-        // 기존 이벤트 무시 && 하루 전체에 대한 timeslot 생성
-        timeslots.push({
-          begin_at: slot,
-          end_at: slot + service_duration,
-        });
-      } else if (is_ignore_schedule && !is_ignore_workhour) {
-        // 영업 시작 시간 ~ 영업 종료 시간을 제외한 시간대에 대해서만 timeslot 생성
-        if (slot < timeInfo.workOpenTime || slot > timeInfo.workCloseTime) {
-          timeslots.push({
-            begin_at: slot,
-            end_at: slot + service_duration,
-          });
-        } else {
-          continue;
-        }
-      } else if (!is_ignore_schedule && is_ignore_workhour) {
-        // 기존 이벤트 무시 && 영업시작 시간 ~ 영업종료 시간을 제외한 시간대에 대해서 timeslot 생성
-        if (!this.isEventExist(slot, slot + service_duration, events)) {
-          timeslots.push({
-            begin_at: slot,
-            end_at: slot + service_duration,
-          });
-        } else {
-          continue;
-        }
-      } else {
-        // 영업시작 시간 ~ 영업 종료 시간을 제외한 시간대에 대해서 timeslot 생성 && 이벤트와 겹치는 시간대는 제외
-        if (
-          (slot < timeInfo.workOpenTime || slot > timeInfo.workCloseTime) &&
-          !this.isEventExist(slot, slot + service_duration, events)
-        ) {
-          timeslots.push({
-            begin_at: slot,
-            end_at: slot + service_duration,
-          });
-        } else {
-          continue;
-        }
+      if (
+        this.shouldCreateTimeslot(
+          slot,
+          timeInfo,
+          is_ignore_schedule,
+          is_ignore_workhour,
+          events,
+          service_duration,
+        )
+      ) {
+        timeslots.push({ begin_at: slot, end_at: slot + service_duration });
       }
     }
+
     return {
       start_of_day: startOfDay,
       day_modifier: day.diff(
@@ -118,12 +92,38 @@ export class GetTimeSlotsService {
     };
   }
 
+  private shouldCreateTimeslot(
+    slot: number,
+    timeInfo: {
+      totalOpenTime: number;
+      totalCloseTime: number;
+      workOpenTime: number;
+      workCloseTime: number;
+    },
+    is_ignore_schedule: boolean,
+    is_ignore_workhour: boolean,
+    events: Event[],
+    service_duration: number,
+  ): boolean {
+    if (is_ignore_schedule && is_ignore_workhour) {
+      return true;
+    } else if (is_ignore_schedule && !is_ignore_workhour) {
+      return slot < timeInfo.workOpenTime || slot > timeInfo.workCloseTime;
+    } else if (!is_ignore_schedule && is_ignore_workhour) {
+      return !this.isEventExist(slot, slot + service_duration, events);
+    } else {
+      return (
+        (slot < timeInfo.workOpenTime || slot > timeInfo.workCloseTime) &&
+        !this.isEventExist(slot, slot + service_duration, events)
+      );
+    }
+  }
+
   private isEventExist(
     beginAt: number,
     endAt: number,
     events: Event[],
   ): boolean {
-    // 이벤트가 존재하는 경우 true, 존재하지 않는 경우 false
     return events.some(
       (event) => event.begin_at <= beginAt && event.end_at >= endAt,
     );
