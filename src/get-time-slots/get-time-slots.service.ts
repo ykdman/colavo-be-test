@@ -19,9 +19,9 @@ export class GetTimeSlotsService {
       timezone_identifier,
     );
     const workhoursData: Workhour[] = loadJson<Workhour[]>(
-      '../../data/workhours.json',
+      'src/data/workhours.json',
     );
-    const eventsData: Event[] = loadJson<Event[]>('../../data/events.json');
+    const eventsData: Event[] = loadJson<Event[]>('src/data/events.json');
 
     const timeTables: DayTimetable[] = [];
 
@@ -51,30 +51,59 @@ export class GetTimeSlotsService {
     } = query;
 
     const startOfDay = day.startOf('day').unix();
-    const isDayOff = is_ignore_workhour ? false : workhour?.is_day_off || true;
+    const isDayOff = workhour?.is_day_off || false;
     const timeslots: Timeslot[] = [];
 
-    if (!isDayOff) {
-      const openInterval = is_ignore_workhour ? 0 : workhour.open_interval || 0;
-      const closeInterval = is_ignore_workhour
-        ? 86400
-        : workhour.close_interval || 86400;
-      const openTime = startOfDay + openInterval;
-      const closeTime = startOfDay + closeInterval;
+    const timeInfo = {
+      totalOpenTime: startOfDay + 0,
+      totalCloseTime: startOfDay + 86400,
+      workOpenTime: startOfDay + workhour?.open_interval,
+      workCloseTime: startOfDay + workhour?.close_interval,
+    };
 
-      for (
-        let slot = openTime;
-        slot + service_duration <= closeTime;
-        slot += timeslot_interval
-      ) {
+    for (
+      let slot = timeInfo.totalOpenTime;
+      slot + service_duration <= timeInfo.totalCloseTime;
+      slot += timeslot_interval
+    ) {
+      if (is_ignore_schedule && is_ignore_workhour) {
+        // 기존 이벤트 무시 && 하루 전체에 대한 timeslot 생성
+        timeslots.push({
+          begin_at: slot,
+          end_at: slot + service_duration,
+        });
+      } else if (is_ignore_schedule && !is_ignore_workhour) {
+        // 영업 시작 시간 ~ 영업 종료 시간을 제외한 시간대에 대해서만 timeslot 생성
+        if (slot < timeInfo.workOpenTime || slot > timeInfo.workCloseTime) {
+          timeslots.push({
+            begin_at: slot,
+            end_at: slot + service_duration,
+          });
+        } else {
+          continue;
+        }
+      } else if (!is_ignore_schedule && is_ignore_workhour) {
+        // 기존 이벤트 무시 && 영업시작 시간 ~ 영업종료 시간을 제외한 시간대에 대해서 timeslot 생성
+        if (!this.isEventExist(slot, slot + service_duration, events)) {
+          timeslots.push({
+            begin_at: slot,
+            end_at: slot + service_duration,
+          });
+        } else {
+          continue;
+        }
+      } else {
+        // 영업시작 시간 ~ 영업 종료 시간을 제외한 시간대에 대해서 timeslot 생성 && 이벤트와 겹치는 시간대는 제외
         if (
-          is_ignore_schedule ||
-          !this.isSlotOverlapping(slot, slot + service_duration, events)
+          (slot < timeInfo.workOpenTime || slot > timeInfo.workCloseTime) &&
+          !this.isEventExist(slot, slot + service_duration, events)
         ) {
           timeslots.push({
             begin_at: slot,
             end_at: slot + service_duration,
           });
+        } else {
+          continue;
         }
       }
     }
@@ -89,13 +118,14 @@ export class GetTimeSlotsService {
     };
   }
 
-  private isSlotOverlapping(
+  private isEventExist(
     beginAt: number,
     endAt: number,
     events: Event[],
   ): boolean {
+    // 이벤트가 존재하는 경우 true, 존재하지 않는 경우 false
     return events.some(
-      (event) => !(event.end_at <= beginAt || event.begin_at >= endAt),
+      (event) => event.begin_at <= beginAt && event.end_at >= endAt,
     );
   }
 }
